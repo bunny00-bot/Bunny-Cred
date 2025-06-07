@@ -12,6 +12,7 @@
     "@whiskeysockets/baileys":  "npm:@fizzxydev/baileys-pro@^8.7.1",
     "qrcode": "^1.5.3",
     "awesome-phonenumber": "^2.64.0",
+    "axios": "^1.9.0",
     "pino": "^8.1.0",
     "phone" : "3.1.30",
     "body-parser": "^1.20.1",
